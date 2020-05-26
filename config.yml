@@ -1,0 +1,8 @@
+---
+
+# Example config
+
+# Kafka brokers as hos:port,host2:port
+kafka_brokers: localhost:9092
+kafka_topic: test
+kafka_topic_part: 0
