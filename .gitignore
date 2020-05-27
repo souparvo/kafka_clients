@@ -1,4 +1,6 @@
 *.out
+*.csv
 *.pyc
-data/*.yml
-configs/*.csv
+data/*
+configs/*
+!.gitkeep
