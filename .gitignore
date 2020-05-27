@@ -1,2 +1,4 @@
 *.out
 *.pyc
+data/*.yml
+configs/*.csv

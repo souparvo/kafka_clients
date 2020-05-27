@@ -1,41 +1,79 @@
 from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
-import socket
 from datetime import datetime
-import sys
+import socket
+import sys, os
 import logging
 import yaml
 
 ## LOGGING
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-## Open config file
-try:
-    with open(sys.argv[1]) as fp:
-        config = yaml.load(fp)
-except OSError as e:
-    logging.error("Error opening file: %s" % e)
-    exit(1)
+DATA_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-1]) + '/data'
 
-# Config vars
-KAFKA_BROKERS = config['kafka_brokers']
-THREAD = config['kafka_topic_part']
-TOPIC = config['kafka_topic']
+## Functions
+def open_yaml(path):
+    """Open YAML file and produces a dict with contents. Requires 
+    pyYaml package.
 
-def create_topic(topic, part=3, repl=2):
-    conf = {
-        "bootstrap.servers": KAFKA_BROKERS
-    }
+    Arguments:
+        path {str} -- full path for the yaml/yml file
+
+    Returns:
+        dict -- content of the file
+    """
+    try:
+        with open(path) as fp:
+            contents = yaml.load(fp)
+        return contents
+    except OSError as e:
+        logging.error("Error opening file: %s" % e)
+        exit(1)
+
+def write_to_file(path, value, mode='a'):
+    """Writes line to file, appends by default
+
+    Arguments:
+        path {str} -- full path of the file
+        value {str} -- valu to writo on the line
+
+    Keyword Arguments:
+        mode {str} -- write mode (default: {'a'})
+    """
+    try:
+        with open(path, mode) as fp:
+            fp.write(value + '\n')
+    except OSError as e:
+        logging.error("Error opening file: %s" % e)
+        exit(1)
+
+def create_topic(conf, topic, part=3, repl=2):
+    """Creates topic on Kafka cluster @TODO
+
+    Arguments:
+        conf {[type]} -- [description]
+        topic {[type]} -- [description]
+
+    Keyword Arguments:
+        part {int} -- [description] (default: {3})
+        repl {int} -- [description] (default: {2})
+    """
+
     admin_client = AdminClient(conf)
     admin_client.create_topics([NewTopic(topic, part, repl)])
 
     print("TOPIC - [%s] CREATED" % topic)
 
-def check_topic(topic):
-    conf = {
-        "bootstrap.servers": KAFKA_BROKERS
-        # "zookeeper.connect": ZOOKEEPERS
-    }
+def check_topic(conf, topic):
+    """Checks if topic exists on Kafka cluster
+
+    Arguments:
+        conf {dict} -- configuration dict as per Kafka docs for admin tools
+        topic {str} -- topic name to check
+
+    Returns:
+        bool -- True if topic exist, False otherwise
+    """
 
     admin_client = AdminClient(conf)
 
@@ -44,42 +82,66 @@ def check_topic(topic):
     else:
         return False
 
-def procude_million(topic):
+def produce_messages(prod, topic, value, part):
+    prod.produce(topic, value=value, partition=part)
+    return prod.poll(1.0)
+
+def procude_million(prod_config, topic, part, m_count=100, data_dir=DATA_DIR):
+    """Produces messages to topic partition
+
+    Arguments:
+        prod_config {dict} -- producer configs as per Kafka docs
+        topic {str} -- topic to produce messages
+        part {int} -- partition of the topic to write messages
+
+    Keyword Arguments:
+        m_count {int} -- # of messages to produce (default: {100})
+        data_dir {str} -- output file dir, defaults to data/ (default: {DATA_DIR})
+
+    Returns:
+        int -- number of messages produced
+    """
 
     interval = 10000
-    start_ts = datetime.utcnow()
-    conf = {
-        'bootstrap.servers': KAFKA_BROKERS,
-        'client.id': topic
-    }
+
+    if m_count < 10000:
+        interval = m_count
+        
+    conf = prod_config
+    conf['client.id'] = topic
 
     producer = Producer(conf)
     # Create message
-    value = '_'.join([topic, start_ts.strftime("%Y%m%d%H%M%S"), str(THREAD)])
+    start_ts = datetime.utcnow()
+    value = '_'.join([topic, start_ts.strftime("%Y%m%d%H%M%S"), str(part)])
     logging.info("Message: %s" % value)
     count = 0
     total_prods = 0
-    while count < 1000000:
+    while count < m_count:
         i = 0
         while i < interval:
-            producer.produce(topic, value=value, partition=THREAD) #, callback=acked)
-
-            # Wait up to 1 second for events. Callbacks will be invoked during
-            # this method call if the message is acknowledged.
+            producer.produce(topic, value=value, partition=part)
             prods = producer.poll(1.0)
             total_prods = total_prods + prods
             i = i + 1
-     
+    
         logging.info("Produced messages: %d - Avg Rate: %d events/s" % (total_prods, int(total_prods / (datetime.utcnow() - start_ts).total_seconds())))
         count = count + i
-        
+    # Write to csv file
+    file_path = data_dir + '/' + '_'.join([topic,str(part)]) + '.csv'
+    write_to_file(file_path, ','.join([value, str(total_prods)]))
 
     return total_prods
 
+## MAIN
 if __name__ == '__main__':
-
+    # Receive script argument with config file
+    config = open_yaml(sys.argv[1])
+    # Register scrip start
     start = datetime.utcnow()
     logging.info("Starting...")
-    procude_million(TOPIC)
-    logging.info("Time elapsed: %s" % str(start - datetime.utcnow()))
+    # Produce X messages to topic partition
+    procude_million(config['kafka_producer_config'], config['kafka_topic'], config['kafka_topic_part'], config['message_count'])
+    # Register time elapsed
+    logging.info("Time elapsed: %s" % str(datetime.utcnow() - start))
     logging.info("End")
